@@ -1,4 +1,7 @@
+import os
+import json
 import tqdm
+import torch
 import configparser
 from torch import nn, optim
 
@@ -9,6 +12,8 @@ from BPR import BPR
 
 def train(model, opt, data_splitter, validation_data, batch_size, config):
     epoch_data = []
+    best_model_state_dict = None
+    best_ndcg = 0
     for epoch in range(config.getint('MODEL', 'epoch')):
         model.train()
         train_loader = data_splitter.make_train_loader(config.getint('MODEL', 'n_negative'), batch_size)
@@ -27,8 +32,19 @@ def train(model, opt, data_splitter, validation_data, batch_size, config):
             total_loss += loss.item()
         hit_ratio, ndcg = evaluation.evaluate(model, validation_data, config.getint('EVALUATION', 'top_k'))
         epoch_data.append({'epoch': epoch, 'loss': total_loss, 'HR': hit_ratio, 'NDCG': ndcg})
+        if ndcg > best_ndcg:
+            best_model_state_dict = model.state_dict()
         print('[Epoch {}] Loss = {:.2f}, HR = {:.4f}, NDCG = {:.4f}'.format(epoch, total_loss, hit_ratio, ndcg))
-    return epoch_data
+    return epoch_data, best_model_state_dict
+
+
+def save_train_result(best_model_state_dict, epoch_data, batch_size, lr, latent_dim, l2_reg, config):
+    result_dir = "data/train_result/batch_size_{}-lr_{}-latent_dim_{}-l2_reg_{}-epoch_{}-n_negative_{}-top_k_{}".format(
+        batch_size, lr, latent_dim, l2_reg, config['MODEL']['epoch'], config['MODEL']['n_negative'], config['EVALUATION']['top_k'])
+    os.makedirs(result_dir, exist_ok=True)
+    torch.save(best_model_state_dict, os.path.join(result_dir, 'model.pth'))
+    with open(os.path.join(result_dir, 'epoch_data.json'), 'w') as f:
+        json.dump(epoch_data, f, indent=4)
 
 
 def main():
@@ -49,7 +65,8 @@ def main():
                     model.to('cuda:0')
 
                     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=l2_reg)
-                    epoch_data = train(model, opt, data_splitter, validation_data, batch_size, config)
+                    epoch_data, best_model_state_dict = train(model, opt, data_splitter, validation_data, batch_size, config)
+                    save_train_result(best_model_state_dict, epoch_data, batch_size, lr, latent_dim, l2_reg, config)
 
 
 if __name__ == "__main__":
